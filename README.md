@@ -56,6 +56,10 @@ Cobalt Strike/Sliver
 execute-assembly rbcd_manager.exe <args>
 ```
 
+<img width="953" height="834" alt="Screenshot From 2025-12-03 12-33-18" src="https://github.com/user-attachments/assets/37b45f57-df73-4177-ae94-92ef2456ef34" />
+<img width="1108" height="588" alt="Screenshot From 2025-12-03 12-31-44" src="https://github.com/user-attachments/assets/151534c8-955a-4f68-be0b-ecc037940be2" />
+
+
 This allows red team operators to run the tool fully in-memory, without touching disk, ideal for secure or stealthy assessments (always with proper authorization).
 
 # 📌 Features
