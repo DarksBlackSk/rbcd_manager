@@ -45,6 +45,40 @@ rbcd_manager.exe -verify CONTOSO.COM
 
 <img width="779" height="871" alt="Screenshot From 2025-12-03 12-33-00" src="https://github.com/user-attachments/assets/1c2ee19f-368f-4a45-94f0-16f33e2d42eb" />
 
+## 3) List RBCD Configurations
+
+```powershell
+rbcd_manager.exe -list <domain>
+```
+
+
+## 4) Create Computer Account
+
+```powershell
+rbcd_manager.exe -create <computer_name> <domain> [password]
+```
+
+* When a password is not specified, a random one will be generated and the user will be informed aboud it
+
+```powershell
+rbcd_manager.exe -create <computer_name> <domain>
+```
+
+## 5) Remove RBCD Configuration 
+
+* Remove a specific machine from the configuration list in <target_computer>
+
+```powershell
+rbcd_manager.exe -remove <target_computer> <domain> [attacker_computer]
+```
+
+* Remove all machines from the configuration list in <target_computer>
+
+```powershell
+rbcd_manager.exe -remove <target_computer> <domain>
+```
+
+
 # 🛰️ Reflexive Execution in C2 Frameworks
 
 The compiled binary of rbcd_manager can also be executed reflexively through C2 frameworks such as Cobalt Strike, Sliver, Mythic, or Brute Ratel using .NET in-memory execution techniques.

